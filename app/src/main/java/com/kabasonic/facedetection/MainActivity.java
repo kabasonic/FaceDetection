@@ -2,20 +2,16 @@ package com.kabasonic.facedetection;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
-import android.content.ContentResolver;
+import android.app.ProgressDialog;
 import android.content.Context;
 import android.content.Intent;
-import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.media.FaceDetector;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.SystemClock;
 import android.provider.MediaStore;
-import android.util.Base64;
-import android.util.Base64OutputStream;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -35,31 +31,21 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.google.android.material.button.MaterialButton;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.kabasonic.facedetection.model.Age;
-import com.kabasonic.facedetection.model.Attributes;
 import com.kabasonic.facedetection.model.Face;
 import com.kabasonic.facedetection.model.FaceDetected;
 
-import org.apache.commons.io.FileUtils;
 import org.jetbrains.annotations.NotNull;
 
-import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.net.URI;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import okhttp3.Interceptor;
-import okhttp3.MediaType;
 import okhttp3.MultipartBody;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -70,7 +56,6 @@ import retrofit2.Callback;
 import retrofit2.Response;
 import retrofit2.Retrofit;
 import retrofit2.converter.gson.GsonConverterFactory;
-import retrofit2.http.FieldMap;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -84,23 +69,38 @@ public class MainActivity extends AppCompatActivity {
 
     private FaceApi faceApi;
 
-    public static final String API_KEY = "Z8wAnve8-j-79A6AMq5XWAYzS9wrn0s8";
-    public static final String API_SECRET = "LVb5YVJKIcSJu8kE53Ra-lberVWDqWz8";
-    public static final String BASE_URL = "https://api-us.faceplusplus.com/facepp/v3/";
-
     private int sizeListFaceToken = 0;
+
+    private ProgressDialog progress;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-
         initViewComponents();
-        actionImageBt.setOnClickListener(v ->
-                dialogSelectedPhoto() );
+
+        actionImageBt.setOnClickListener(v -> {
+            if(faceAdapter!=null){
+                faceAdapter.clearListsAdapter();
+            }
+            dialogSelectedPhoto();
+        });
+
         initRv();
         initApi();
 
+    }
+    //progress dialog
+    private void progressDialog(boolean visibility){
+        if(visibility){
+            progress = new ProgressDialog(MainActivity.this);
+            progress.setTitle("Loading");
+            progress.setMessage("Wait while loading...");
+            progress.setCancelable(false); // disable dismiss by tapping outside of the dialog
+            progress.show();
+        }else{
+            progress.dismiss();
+        }
     }
 
     // init view components on the main screen
@@ -171,48 +171,85 @@ public class MainActivity extends AppCompatActivity {
                 @Override
                 public void onActivityResult(Uri uri) {
                     // Handle the returned Uri
-                    String imagePath = getImagePath(uri);
-                    File file = new File(imagePath);
+                    File file = null;
+                    Bitmap bitmap = null;
+                    try {
+                        bitmap = MediaStore.Images.Media.getBitmap(getContentResolver(), uri);
+                        bitmap = Bitmap.createScaledBitmap(bitmap,512,512,false);
+                        file = bitmapToFile(MainActivity.this,bitmap,"image.png");
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
                     if(file.exists()){
-                        mainImage.setImageURI(Uri.parse(imagePath));
-                        sendPhotoToServer(file,uri);
+                        mainImage.setImageBitmap(bitmap);
+                        sendPhotoToServer(file);
                     }
                 }
             });
 
-    public String getImagePath(Uri uri){
-        Cursor cursor = getContentResolver().query(uri, null, null, null, null);
-        cursor.moveToFirst();
-        String document_id = cursor.getString(0);
-        document_id = document_id.substring(document_id.lastIndexOf(":")+1);
-        cursor.close();
+    //converting bitmap image to file
+    private File bitmapToFile(Context context,Bitmap bitmap, String fileNameToSave) { // File name like "image.png"
+        //create a file to write bitmap data
+        File file = null;
+        try {
+            file = new File(Environment.getExternalStorageDirectory() + File.separator + fileNameToSave);
+            file.createNewFile();
 
-        cursor = getContentResolver().query(
-                android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                null, MediaStore.Images.Media._ID + " = ? ", new String[]{document_id}, null);
-        cursor.moveToFirst();
-        String path = cursor.getString(cursor.getColumnIndex(MediaStore.Images.Media.DATA));
-        cursor.close();
+            //Convert bitmap to byte array
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            bitmap.compress(Bitmap.CompressFormat.PNG, 0 , bos); // YOU can also save it in JPEG
+            byte[] bitmapdata = bos.toByteArray();
 
-        return path;
+            //write the bytes in file
+            FileOutputStream fos = new FileOutputStream(file);
+            fos.write(bitmapdata);
+            fos.flush();
+            fos.close();
+            return file;
+        }catch (Exception e){
+            e.printStackTrace();
+            return file; // it will return null
+        }
     }
 
+    //processing bitmap image
+    private Bitmap processingBitmapImage(String file, int width, int height) {
+        BitmapFactory.Options bmpFactoryOptions = new BitmapFactory.Options();
+        bmpFactoryOptions.inJustDecodeBounds = true;
+        Bitmap bitmap = BitmapFactory.decodeFile(file, bmpFactoryOptions);
+        int heightRatio = (int) Math.ceil(bmpFactoryOptions.outHeight / (float) height);
+        int widthRatio = (int) Math.ceil(bmpFactoryOptions.outWidth / (float) width);
+        if(heightRatio > 1 || widthRatio > 1)
+        {
+            if(heightRatio > widthRatio) {
+                bmpFactoryOptions.inSampleSize = heightRatio;
+            }
+            else {
+                bmpFactoryOptions.inSampleSize = widthRatio;
+            }
+        }
+        bmpFactoryOptions.inJustDecodeBounds = false;
+        bitmap = BitmapFactory.decodeFile(file, bmpFactoryOptions);
+        return bitmap;
+    }
 
     //callback with camera
     ActivityResultLauncher<Intent> activityResultLauncher = registerForActivityResult(
             new ActivityResultContracts.StartActivityForResult(),
             result -> {
                 if(result.getResultCode() == Activity.RESULT_OK){
-                    Log.d(TAG,"photoPath " + photoPath);
-                   File file = new File(photoPath);
+                    File file = null;
+                    Bitmap bitmap = processingBitmapImage(photoPath,512,512);
+                    file = bitmapToFile(MainActivity.this,bitmap,"image.png");
                    if(file.exists()){
-                       mainImage.setImageURI(Uri.fromFile(file));
-                       sendPhotoToServer(file, Uri.fromFile(file));
+                       mainImage.setImageBitmap(bitmap);
+                       sendPhotoToServer(file);
                    }
                 }
             }
     );
 
+    //init api
     private void initApi(){
         HttpLoggingInterceptor httpLoggingInterceptor = new HttpLoggingInterceptor();
         httpLoggingInterceptor.setLevel(HttpLoggingInterceptor.Level.BODY);
@@ -225,8 +262,6 @@ public class MainActivity extends AppCompatActivity {
                     public okhttp3.Response intercept(@NotNull Chain chain) throws IOException {
                         Request originalRequest = chain.request();
                         Request newRequest = originalRequest.newBuilder()
-                                //using once request, if need more, use .addheader()
-                                //.header("Headers 1: ", "value 1")
                                 .build();
                         return chain.proceed(newRequest);
                     }
@@ -236,7 +271,7 @@ public class MainActivity extends AppCompatActivity {
         Gson gson = new GsonBuilder().serializeNulls().create();
 
         Retrofit retrofit = new Retrofit.Builder()
-                .baseUrl(BASE_URL)
+                .baseUrl(BuildConfig.BASE_URL)
                 .addConverterFactory(GsonConverterFactory.create())
                 .client(client)
                 .build();
@@ -244,10 +279,12 @@ public class MainActivity extends AppCompatActivity {
         faceApi = retrofit.create(FaceApi.class);
     }
 
-    private void sendPhotoToServer(File imageFile, Uri fileUri) {
+    //post query processing photo
+    private void sendPhotoToServer(File imageFile) {
+        progressDialog(true);
         MultipartBody.Builder builder = new MultipartBody.Builder().setType(MultipartBody.FORM);
-        builder.addFormDataPart("api_key",API_KEY)
-                .addFormDataPart("api_secret",API_SECRET);
+        builder.addFormDataPart("api_key",BuildConfig.API_KEY)
+                .addFormDataPart("api_secret",BuildConfig.API_SECRET);
         if (imageFile.exists()) {
             builder.addFormDataPart("image_file", imageFile.getName(), RequestBody.create(MultipartBody.FORM, imageFile));
         }
@@ -275,10 +312,12 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onFailure(Call<FaceDetected> call, Throwable t) {
                 Log.d(getClass().getSimpleName(), "onFailure|postsList|Message: " + t.getMessage());
+                progressDialog(false);
             }
         });
     }
 
+    //post query detected age
     private void detectedAge(List<String> faceToken, File imageFile){
         String singleToken;
         SystemClock.sleep(1000);
@@ -287,11 +326,12 @@ public class MainActivity extends AppCompatActivity {
             sizeListFaceToken++;
         }else {
             sizeListFaceToken = 0;
+            progressDialog(false);
             return;
         }
         MultipartBody.Builder builder = new MultipartBody.Builder().setType(MultipartBody.FORM);
-        builder.addFormDataPart("api_key",API_KEY)
-                .addFormDataPart("api_secret",API_SECRET)
+        builder.addFormDataPart("api_key",BuildConfig.API_KEY)
+                .addFormDataPart("api_secret",BuildConfig.API_SECRET)
                 .addFormDataPart("return_attributes","age")
                 .addFormDataPart("face_tokens",singleToken);
         RequestBody requestBody = builder.build();
@@ -322,17 +362,17 @@ public class MainActivity extends AppCompatActivity {
                     faceAdapter.addItemAttributesList(itemFace.getAttributes());
                     faceAdapter.notifyDataSetChanged();
                 }
-
-
             }
             @Override
             public void onFailure(Call<FaceDetected> call, Throwable t) {
                 Log.d(getClass().getSimpleName(), "onFailure|postsList|Message: " + t.getMessage());
+                progressDialog(false);
             }
         });
         detectedAge(faceToken, imageFile);
     }
 
+    //init recycler view
     private void initRv(){
         faceAdapter = new FaceAdapter(MainActivity.this);
         RecyclerView.LayoutManager layoutManager = new LinearLayoutManager(MainActivity.this,RecyclerView.VERTICAL,false);
@@ -354,10 +394,4 @@ public class MainActivity extends AppCompatActivity {
      * Za wartość graniczną między "dzieciństwem" a "dorosłością" należy wybrać liczbę z przedziału 15-20,
      * w zależności od zastosowanego mechanizmu szacowania wieku
      * */
-
-    /*
-    API key: Z8wAnve8-j-79A6AMq5XWAYzS9wrn0s8
-    API secret: LVb5YVJKIcSJu8kE53Ra-lberVWDqWz8
-     */
-
 }

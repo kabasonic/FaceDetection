@@ -43,6 +43,11 @@ public class FaceAdapter extends RecyclerView.Adapter<FaceAdapter.ViewHolder> {
         this.attributesList.add(attributesItem);
     }
 
+    public void clearListsAdapter(){
+        faceImageList.clear();
+        attributesList.clear();
+    }
+
     @NonNull
     @Override
     public ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
@@ -57,8 +62,11 @@ public class FaceAdapter extends RecyclerView.Adapter<FaceAdapter.ViewHolder> {
         Attributes attributes = attributesList.get(position);
         int rowAge = attributes.getAge().getValue();
         holder.faceImage.setImageBitmap(rowImage);
-        holder.faceAge.setText(String.valueOf(rowAge));
-        holder.faceId.setText(String.valueOf(position));
+        String str = "Age person: " + rowAge;
+        holder.faceAge.setText(str);
+        int id =+ position;
+        str = "ID person: " + id;
+        holder.faceId.setText(str);
     }
 
     @Override
